@@ -25,7 +25,7 @@ func NewGateway(ctx ttnlog.Interface, id string) *Gateway {
 		Schedule:    NewSchedule(ctx),
 		Ctx:         ctx,
 	}
-	gtw.Schedule.(*schedule).gateway = gtw // FIXME: Issue #420
+	gtw.Schedule.gateway = gtw
 	return gtw
 }
 
@@ -34,7 +34,7 @@ type Gateway struct {
 	ID          string
 	Status      StatusStore
 	Utilization Utilization
-	Schedule    Schedule
+	Schedule    *Schedule
 	LastSeen    time.Time
 
 	mu            sync.RWMutex // Protect token and authenticated

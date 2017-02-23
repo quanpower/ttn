@@ -24,6 +24,8 @@ func newReferenceGateway(t *testing.T, frequencyPlan string) *gateway.Gateway {
 	gtw.Status.Update(&pb_gateway.Status{
 		FrequencyPlan: frequencyPlan,
 	})
+	gtw.Schedule.Sync(0)
+	gtw.Schedule.Subscribe()
 	return gtw
 }
 

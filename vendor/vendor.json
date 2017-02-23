@@ -141,6 +141,12 @@
 			"revisionTime": "2017-03-22T07:18:41Z"
 		},
 		{
+			"checksumSHA1": "aW+EoKKmJasOwy4//7JgaaMDYJI=",
+			"path": "github.com/TheThingsNetwork/go-utils/queue",
+			"revision": "f81a36ea68c3a11be75c537d7be25603417b2fb5",
+			"revisionTime": "2017-03-22T07:18:41Z"
+		},
+		{
 			"checksumSHA1": "iYa+qSqzqZwpmoibM8/1X+aC3sI=",
 			"path": "github.com/TheThingsNetwork/go-utils/random",
 			"revision": "f81a36ea68c3a11be75c537d7be25603417b2fb5",
