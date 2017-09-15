@@ -6,22 +6,23 @@ package handler
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	pb_broker "github.com/TheThingsNetwork/api/broker"
+	pb_handler "github.com/TheThingsNetwork/api/handler"
+	pb_lorawan "github.com/TheThingsNetwork/api/protocol/lorawan"
 	"github.com/TheThingsNetwork/go-account-lib/claims"
 	"github.com/TheThingsNetwork/go-account-lib/rights"
+	"github.com/TheThingsNetwork/go-utils/grpc/ttnctx"
 	ttnlog "github.com/TheThingsNetwork/go-utils/log"
-	"github.com/TheThingsNetwork/ttn/api"
-	pb_broker "github.com/TheThingsNetwork/ttn/api/broker"
-	pb "github.com/TheThingsNetwork/ttn/api/handler"
-	pb_lorawan "github.com/TheThingsNetwork/ttn/api/protocol/lorawan"
 	"github.com/TheThingsNetwork/ttn/api/ratelimit"
 	"github.com/TheThingsNetwork/ttn/core/handler/application"
 	"github.com/TheThingsNetwork/ttn/core/handler/device"
 	"github.com/TheThingsNetwork/ttn/core/storage"
 	"github.com/TheThingsNetwork/ttn/core/types"
 	"github.com/TheThingsNetwork/ttn/utils/errors"
-	"github.com/golang/protobuf/ptypes/empty"
+	gogo "github.com/gogo/protobuf/types"
 	"golang.org/x/net/context" // See https://github.com/grpc/grpc-go/issues/711"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,7 +31,6 @@ import (
 
 type handlerManager struct {
 	handler         *handler
-	deviceManager   pb_lorawan.DeviceManagerClient
 	devAddrManager  pb_lorawan.DevAddrManagerClient
 	applicationRate *ratelimit.Registry
 	clientRate      *ratelimit.Registry
@@ -44,12 +44,12 @@ func checkAppRights(claims *claims.Claims, appID string, right types.Right) erro
 }
 
 func (h *handlerManager) validateTTNAuthAppContext(ctx context.Context, appID string) (context.Context, *claims.Claims, error) {
-	md := api.MetadataFromContext(ctx)
+	md := ttnctx.MetadataFromIncomingContext(ctx)
 
 	// If token is empty, try to get the access key and convert it into a token
-	token, err := api.TokenFromMetadata(md)
+	token, err := ttnctx.TokenFromMetadata(md)
 	if err != nil || token == "" {
-		key, err := api.KeyFromMetadata(md)
+		key, err := ttnctx.KeyFromMetadata(md)
 		if err != nil {
 			return ctx, nil, errors.NewErrInvalidArgument("Metadata", "neither token nor key present")
 		}
@@ -58,7 +58,7 @@ func (h *handlerManager) validateTTNAuthAppContext(ctx context.Context, appID st
 			return ctx, nil, err
 		}
 		md = metadata.Join(md, metadata.Pairs("token", token))
-		ctx = metadata.NewContext(ctx, md)
+		ctx = metadata.NewIncomingContext(ctx, md)
 	}
 	claims, err := h.handler.Component.ValidateTTNAuthContext(ctx)
 	if err != nil {
@@ -73,54 +73,35 @@ func (h *handlerManager) validateTTNAuthAppContext(ctx context.Context, appID st
 	return ctx, claims, nil
 }
 
-func (h *handlerManager) GetDevice(ctx context.Context, in *pb.DeviceIdentifier) (*pb.Device, error) {
+func (h *handlerManager) GetDevice(ctx context.Context, in *pb_handler.DeviceIdentifier) (*pb_handler.Device, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Device Identifier")
 	}
 
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.Devices)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	err = checkAppRights(claims, in.AppID, rights.Devices)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := h.handler.applications.Get(in.AppId); err != nil {
+	if _, err := h.handler.applications.Get(in.AppID); err != nil {
 		return nil, errors.Wrap(err, "Application not registered to this Handler")
 	}
 
-	dev, err := h.handler.devices.Get(in.AppId, in.DevId)
+	dev, err := h.handler.devices.Get(in.AppID, in.DevID)
 	if err != nil {
 		return nil, err
 	}
 
-	pbDev := &pb.Device{
-		AppId:       dev.AppID,
-		DevId:       dev.DevID,
-		Description: dev.Description,
-		Device: &pb.Device_LorawanDevice{LorawanDevice: &pb_lorawan.Device{
-			AppId:                 dev.AppID,
-			AppEui:                &dev.AppEUI,
-			DevId:                 dev.DevID,
-			DevEui:                &dev.DevEUI,
-			DevAddr:               &dev.DevAddr,
-			NwkSKey:               &dev.NwkSKey,
-			AppSKey:               &dev.AppSKey,
-			AppKey:                &dev.AppKey,
-			DisableFCntCheck:      dev.Options.DisableFCntCheck,
-			Uses32BitFCnt:         dev.Options.Uses32BitFCnt,
-			ActivationConstraints: dev.Options.ActivationConstraints,
-		}},
-		Latitude:  dev.Latitude,
-		Longitude: dev.Longitude,
-		Altitude:  dev.Altitude,
-	}
+	pbDev := dev.ToPb()
 
-	nsDev, err := h.deviceManager.GetDevice(ctx, &pb_lorawan.DeviceIdentifier{
-		AppEui: &dev.AppEUI,
-		DevEui: &dev.DevEUI,
+	nsDev, err := h.handler.ttnDeviceManager.GetDevice(ttnctx.OutgoingContextWithToken(ctx, token), &pb_lorawan.DeviceIdentifier{
+		AppEUI: &dev.AppEUI,
+		DevEUI: &dev.DevEUI,
 	})
 	if errors.GetErrType(errors.FromGRPCError(err)) == errors.NotFound {
 		// Re-register the device in the Broker (NetworkServer)
@@ -130,8 +111,10 @@ func (h *handlerManager) GetDevice(ctx context.Context, in *pb.DeviceIdentifier)
 			"AppEUI": dev.AppEUI,
 			"DevEUI": dev.DevEUI,
 		}).Warn("Re-registering missing device to Broker")
-		nsDev = dev.GetLoRaWAN()
-		_, err = h.deviceManager.SetDevice(ctx, nsDev)
+		nsDev = dev.ToLoRaWANPb()
+		nsDev.AppKey = nil
+		nsDev.AppSKey = nil
+		_, err = h.handler.ttnDeviceManager.SetDevice(ttnctx.OutgoingContextWithToken(ctx, token), nsDev)
 		if err != nil {
 			return nil, errors.Wrap(errors.FromGRPCError(err), "Could not re-register missing device to Broker")
 		}
@@ -139,37 +122,38 @@ func (h *handlerManager) GetDevice(ctx context.Context, in *pb.DeviceIdentifier)
 		return pbDev, errors.Wrap(errors.FromGRPCError(err), "Broker did not return device")
 	}
 
-	pbDev.GetLorawanDevice().FCntUp = nsDev.FCntUp
-	pbDev.GetLorawanDevice().FCntDown = nsDev.FCntDown
-	pbDev.GetLorawanDevice().LastSeen = nsDev.LastSeen
+	pbDev.GetLoRaWANDevice().FCntUp = nsDev.FCntUp
+	pbDev.GetLoRaWANDevice().FCntDown = nsDev.FCntDown
+	pbDev.GetLoRaWANDevice().LastSeen = nsDev.LastSeen
 
 	return pbDev, nil
 }
 
-func (h *handlerManager) SetDevice(ctx context.Context, in *pb.Device) (*empty.Empty, error) {
+func (h *handlerManager) SetDevice(ctx context.Context, in *pb_handler.Device) (*gogo.Empty, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Device")
 	}
 
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.Devices)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	err = checkAppRights(claims, in.AppID, rights.Devices)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := h.handler.applications.Get(in.AppId); err != nil {
+	if _, err := h.handler.applications.Get(in.AppID); err != nil {
 		return nil, errors.Wrap(err, "Application not registered to this Handler")
 	}
 
-	dev, err := h.handler.devices.Get(in.AppId, in.DevId)
+	dev, err := h.handler.devices.Get(in.AppID, in.DevID)
 	if err != nil && errors.GetErrType(err) != errors.NotFound {
 		return nil, err
 	}
 
-	lorawan := in.GetLorawanDevice()
+	lorawan := in.GetLoRaWANDevice()
 	if lorawan == nil {
 		return nil, errors.NewErrInvalidArgument("Device", "No LoRaWAN Device")
 	}
@@ -177,11 +161,11 @@ func (h *handlerManager) SetDevice(ctx context.Context, in *pb.Device) (*empty.E
 	var eventType types.EventType
 	if dev != nil {
 		eventType = types.UpdateEvent
-		if dev.AppEUI != *lorawan.AppEui || dev.DevEUI != *lorawan.DevEui {
+		if dev.AppEUI != *lorawan.AppEUI || dev.DevEUI != *lorawan.DevEUI {
 			// If the AppEUI or DevEUI is changed, we should remove the device from the NetworkServer and re-add it later
-			_, err = h.deviceManager.DeleteDevice(ctx, &pb_lorawan.DeviceIdentifier{
-				AppEui: &dev.AppEUI,
-				DevEui: &dev.DevEUI,
+			_, err = h.handler.ttnDeviceManager.DeleteDevice(ttnctx.OutgoingContextWithToken(ctx, token), &pb_lorawan.DeviceIdentifier{
+				AppEUI: &dev.AppEUI,
+				DevEUI: &dev.DevEUI,
 			})
 			if err != nil {
 				return nil, errors.Wrap(errors.FromGRPCError(err), "Broker did not delete device")
@@ -190,62 +174,36 @@ func (h *handlerManager) SetDevice(ctx context.Context, in *pb.Device) (*empty.E
 		dev.StartUpdate()
 	} else {
 		eventType = types.CreateEvent
-		existingDevices, err := h.handler.devices.ListForApp(in.AppId, nil)
+		existingDevices, err := h.handler.devices.ListForApp(in.AppID, nil)
 		if err != nil {
 			return nil, err
 		}
 		for _, existingDevice := range existingDevices {
-			if existingDevice.AppEUI == *lorawan.AppEui && existingDevice.DevEUI == *lorawan.DevEui {
+			if existingDevice.AppEUI == *lorawan.AppEUI && existingDevice.DevEUI == *lorawan.DevEUI {
 				return nil, errors.NewErrAlreadyExists("Device with AppEUI and DevEUI")
 			}
 		}
 		dev = new(device.Device)
 	}
 
-	dev.AppID = in.AppId
-	dev.AppEUI = *lorawan.AppEui
-	dev.DevID = in.DevId
-	dev.DevEUI = *lorawan.DevEui
-
-	dev.Description = in.Description
-
-	dev.Options = device.Options{
-		DisableFCntCheck:      lorawan.DisableFCntCheck,
-		Uses32BitFCnt:         lorawan.Uses32BitFCnt,
-		ActivationConstraints: lorawan.ActivationConstraints,
+	// Reset join nonces when AppKey changes
+	if lorawan.AppKey != nil && dev.AppKey != *lorawan.AppKey { // do this BEFORE dev.FromPb(in)
+		dev.UsedAppNonces = []device.AppNonce{}
+		dev.UsedDevNonces = []device.DevNonce{}
 	}
+	dev.FromPb(in)
 	if dev.Options.ActivationConstraints == "" {
 		dev.Options.ActivationConstraints = "local"
 	}
 
-	if lorawan.DevAddr != nil {
-		dev.DevAddr = *lorawan.DevAddr
-	}
-	if lorawan.NwkSKey != nil {
-		dev.NwkSKey = *lorawan.NwkSKey
-	}
-	if lorawan.AppSKey != nil {
-		dev.AppSKey = *lorawan.AppSKey
-	}
-
-	if lorawan.AppKey != nil {
-		if dev.AppKey != *lorawan.AppKey { // When the AppKey of an existing device is changed
-			dev.UsedAppNonces = []device.AppNonce{}
-			dev.UsedDevNonces = []device.DevNonce{}
-		}
-		dev.AppKey = *lorawan.AppKey
-	}
-
-	dev.Latitude = in.Latitude
-	dev.Longitude = in.Longitude
-	dev.Altitude = in.Altitude
-
 	// Update the device in the Broker (NetworkServer)
-	nsUpdated := dev.GetLoRaWAN()
-	nsUpdated.FCntUp = lorawan.FCntUp
-	nsUpdated.FCntDown = lorawan.FCntDown
+	lorawanPb := dev.ToLoRaWANPb()
+	lorawanPb.AppKey = nil
+	lorawanPb.AppSKey = nil
+	lorawanPb.FCntUp = lorawan.FCntUp
+	lorawanPb.FCntDown = lorawan.FCntDown
 
-	_, err = h.deviceManager.SetDevice(ctx, nsUpdated)
+	_, err = h.handler.ttnDeviceManager.SetDevice(ttnctx.OutgoingContextWithToken(ctx, token), lorawanPb)
 	if err != nil {
 		return nil, errors.Wrap(errors.FromGRPCError(err), "Broker did not set device")
 	}
@@ -262,96 +220,80 @@ func (h *handlerManager) SetDevice(ctx context.Context, in *pb.Device) (*empty.E
 		Data:  nil, // Don't send potentially sensitive details over MQTT
 	}
 
-	return &empty.Empty{}, nil
+	return &gogo.Empty{}, nil
 }
 
-func (h *handlerManager) DeleteDevice(ctx context.Context, in *pb.DeviceIdentifier) (*empty.Empty, error) {
+func (h *handlerManager) DeleteDevice(ctx context.Context, in *pb_handler.DeviceIdentifier) (*gogo.Empty, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Device Identifier")
 	}
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.Devices)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	err = checkAppRights(claims, in.AppID, rights.Devices)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := h.handler.applications.Get(in.AppId); err != nil {
+	if _, err := h.handler.applications.Get(in.AppID); err != nil {
 		return nil, errors.Wrap(err, "Application not registered to this Handler")
 	}
 
-	dev, err := h.handler.devices.Get(in.AppId, in.DevId)
+	dev, err := h.handler.devices.Get(in.AppID, in.DevID)
 	if err != nil {
 		return nil, err
 	}
-	_, err = h.deviceManager.DeleteDevice(ctx, &pb_lorawan.DeviceIdentifier{AppEui: &dev.AppEUI, DevEui: &dev.DevEUI})
+	_, err = h.handler.ttnDeviceManager.DeleteDevice(ttnctx.OutgoingContextWithToken(ctx, token), &pb_lorawan.DeviceIdentifier{AppEUI: &dev.AppEUI, DevEUI: &dev.DevEUI})
 	if err != nil && errors.GetErrType(errors.FromGRPCError(err)) != errors.NotFound {
 		return nil, errors.Wrap(errors.FromGRPCError(err), "Broker did not delete device")
 	}
-	err = h.handler.devices.Delete(in.AppId, in.DevId)
+	err = h.handler.devices.Delete(in.AppID, in.DevID)
 	if err != nil {
 		return nil, err
 	}
 	h.handler.qEvent <- &types.DeviceEvent{
-		AppID: in.AppId,
-		DevID: in.DevId,
+		AppID: in.AppID,
+		DevID: in.DevID,
 		Event: types.DeleteEvent,
 	}
-	return &empty.Empty{}, nil
+	return &gogo.Empty{}, nil
 }
 
-func (h *handlerManager) GetDevicesForApplication(ctx context.Context, in *pb.ApplicationIdentifier) (*pb.DeviceList, error) {
+func (h *handlerManager) GetDevicesForApplication(ctx context.Context, in *pb_handler.ApplicationIdentifier) (*pb_handler.DeviceList, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Application Identifier")
 	}
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.Devices)
+	err = checkAppRights(claims, in.AppID, rights.Devices)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := h.handler.applications.Get(in.AppId); err != nil {
+	if _, err := h.handler.applications.Get(in.AppID); err != nil {
 		return nil, errors.Wrap(err, "Application not registered to this Handler")
 	}
 
-	limit, offset, err := api.LimitAndOffsetFromContext(ctx)
+	limit, offset, err := ttnctx.LimitAndOffsetFromIncomingContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	opts := &storage.ListOptions{Limit: limit, Offset: offset}
-	devices, err := h.handler.devices.ListForApp(in.AppId, opts)
+	devices, err := h.handler.devices.ListForApp(in.AppID, opts)
 	if err != nil {
 		return nil, err
 	}
-	res := &pb.DeviceList{Devices: []*pb.Device{}}
+	res := &pb_handler.DeviceList{Devices: []*pb_handler.Device{}}
 	for _, dev := range devices {
 		if dev == nil {
 			continue
 		}
-		res.Devices = append(res.Devices, &pb.Device{
-			AppId:       dev.AppID,
-			DevId:       dev.DevID,
-			Description: dev.Description,
-			Device: &pb.Device_LorawanDevice{LorawanDevice: &pb_lorawan.Device{
-				AppId:   dev.AppID,
-				AppEui:  &dev.AppEUI,
-				DevId:   dev.DevID,
-				DevEui:  &dev.DevEUI,
-				DevAddr: &dev.DevAddr,
-				NwkSKey: &dev.NwkSKey,
-				AppSKey: &dev.AppSKey,
-				AppKey:  &dev.AppKey,
-			}},
-			Latitude:  dev.Latitude,
-			Longitude: dev.Longitude,
-			Altitude:  dev.Altitude,
-		})
+		res.Devices = append(res.Devices, dev.ToPb())
 	}
 
 	total, selected := opts.GetTotalAndSelected()
@@ -364,46 +306,58 @@ func (h *handlerManager) GetDevicesForApplication(ctx context.Context, in *pb.Ap
 	return res, nil
 }
 
-func (h *handlerManager) GetApplication(ctx context.Context, in *pb.ApplicationIdentifier) (*pb.Application, error) {
+func (h *handlerManager) GetApplication(ctx context.Context, in *pb_handler.ApplicationIdentifier) (*pb_handler.Application, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.NewErrInvalidArgument("Application Identifier", err.Error())
 	}
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.AppSettings)
+	err = checkAppRights(claims, in.AppID, rights.AppSettings)
 	if err != nil {
 		return nil, err
 	}
-	app, err := h.handler.applications.Get(in.AppId)
+	app, err := h.handler.applications.Get(in.AppID)
 	if err != nil {
 		return nil, err
 	}
 
-	return &pb.Application{
-		AppId:         app.AppID,
+	res := &pb_handler.Application{
+		AppID:         app.AppID,
 		PayloadFormat: string(app.PayloadFormat),
 		Decoder:       app.CustomDecoder,
 		Converter:     app.CustomConverter,
 		Validator:     app.CustomValidator,
 		Encoder:       app.CustomEncoder,
-	}, nil
+	}
+	if err := checkAppRights(claims, in.AppID, rights.Devices); err == nil {
+		res.RegisterOnJoinAccessKey = app.RegisterOnJoinAccessKey
+	} else if app.RegisterOnJoinAccessKey != "" {
+		parts := strings.Split(app.RegisterOnJoinAccessKey, ".")
+		if len(parts) == 2 {
+			res.RegisterOnJoinAccessKey = parts[1] + "." + "<...>"
+		} else {
+			res.RegisterOnJoinAccessKey = "..."
+		}
+	}
+	return res, nil
 }
 
-func (h *handlerManager) RegisterApplication(ctx context.Context, in *pb.ApplicationIdentifier) (*empty.Empty, error) {
+func (h *handlerManager) RegisterApplication(ctx context.Context, in *pb_handler.ApplicationIdentifier) (*gogo.Empty, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Application Identifier")
 	}
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.AppSettings)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	err = checkAppRights(claims, in.AppID, rights.AppSettings)
 	if err != nil {
 		return nil, err
 	}
-	app, err := h.handler.applications.Get(in.AppId)
+	app, err := h.handler.applications.Get(in.AppID)
 	if err != nil && errors.GetErrType(err) != errors.NotFound {
 		return nil, err
 	}
@@ -412,43 +366,42 @@ func (h *handlerManager) RegisterApplication(ctx context.Context, in *pb.Applica
 	}
 
 	err = h.handler.applications.Set(&application.Application{
-		AppID: in.AppId,
+		AppID: in.AppID,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	token, _ := api.TokenFromContext(ctx)
-	err = h.handler.Discovery.AddAppID(in.AppId, token)
+	err = h.handler.Discovery.AddAppID(in.AppID, token)
 	if err != nil {
-		h.handler.Ctx.WithField("AppID", in.AppId).WithError(err).Warn("Could not register Application with Discovery")
+		h.handler.Ctx.WithField("AppID", in.AppID).WithError(err).Warn("Could not register Application with Discovery")
 	}
 
-	_, err = h.handler.ttnBrokerManager.RegisterApplicationHandler(ctx, &pb_broker.ApplicationHandlerRegistration{
-		AppId:     in.AppId,
-		HandlerId: h.handler.Identity.Id,
+	_, err = h.handler.ttnBrokerManager.RegisterApplicationHandler(ttnctx.OutgoingContextWithToken(ctx, token), &pb_broker.ApplicationHandlerRegistration{
+		AppID:     in.AppID,
+		HandlerID: h.handler.Identity.ID,
 	})
 	if err != nil {
-		h.handler.Ctx.WithField("AppID", in.AppId).WithError(err).Warn("Could not register Application with Broker")
+		h.handler.Ctx.WithField("AppID", in.AppID).WithError(err).Warn("Could not register Application with Broker")
 	}
 
-	return &empty.Empty{}, nil
+	return &gogo.Empty{}, nil
 
 }
 
-func (h *handlerManager) SetApplication(ctx context.Context, in *pb.Application) (*empty.Empty, error) {
+func (h *handlerManager) SetApplication(ctx context.Context, in *pb_handler.Application) (*gogo.Empty, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Application")
 	}
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.AppSettings)
+	err = checkAppRights(claims, in.AppID, rights.AppSettings)
 	if err != nil {
 		return nil, err
 	}
-	app, err := h.handler.applications.Get(in.AppId)
+	app, err := h.handler.applications.Get(in.AppID)
 	if err != nil {
 		return nil, err
 	}
@@ -460,6 +413,11 @@ func (h *handlerManager) SetApplication(ctx context.Context, in *pb.Application)
 	app.CustomConverter = in.Converter
 	app.CustomValidator = in.Validator
 	app.CustomEncoder = in.Encoder
+
+	if err := checkAppRights(claims, in.AppID, rights.Devices); err == nil {
+		app.RegisterOnJoinAccessKey = in.RegisterOnJoinAccessKey
+	}
+
 	if app.PayloadFormat == "" && (app.CustomDecoder != "" || app.CustomConverter != "" || app.CustomValidator != "" || app.CustomEncoder != "") {
 		app.PayloadFormat = application.PayloadFormatCustom
 	}
@@ -469,34 +427,35 @@ func (h *handlerManager) SetApplication(ctx context.Context, in *pb.Application)
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &gogo.Empty{}, nil
 }
 
-func (h *handlerManager) DeleteApplication(ctx context.Context, in *pb.ApplicationIdentifier) (*empty.Empty, error) {
+func (h *handlerManager) DeleteApplication(ctx context.Context, in *pb_handler.ApplicationIdentifier) (*gogo.Empty, error) {
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Application Identifier")
 	}
-	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppId)
+	ctx, claims, err := h.validateTTNAuthAppContext(ctx, in.AppID)
 	if err != nil {
 		return nil, err
 	}
-	err = checkAppRights(claims, in.AppId, rights.AppDelete)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	err = checkAppRights(claims, in.AppID, rights.AppDelete)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = h.handler.applications.Get(in.AppId)
+	_, err = h.handler.applications.Get(in.AppID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get and delete all devices for this application
-	devices, err := h.handler.devices.ListForApp(in.AppId, nil)
+	devices, err := h.handler.devices.ListForApp(in.AppID, nil)
 	if err != nil {
 		return nil, err
 	}
 	for _, dev := range devices {
-		_, err = h.deviceManager.DeleteDevice(ctx, &pb_lorawan.DeviceIdentifier{AppEui: &dev.AppEUI, DevEui: &dev.DevEUI})
+		_, err = h.handler.ttnDeviceManager.DeleteDevice(ttnctx.OutgoingContextWithToken(ctx, token), &pb_lorawan.DeviceIdentifier{AppEUI: &dev.AppEUI, DevEUI: &dev.DevEUI})
 		if err != nil {
 			return nil, errors.Wrap(errors.FromGRPCError(err), "Broker did not delete device")
 		}
@@ -507,18 +466,17 @@ func (h *handlerManager) DeleteApplication(ctx context.Context, in *pb.Applicati
 	}
 
 	// Delete the Application
-	err = h.handler.applications.Delete(in.AppId)
+	err = h.handler.applications.Delete(in.AppID)
 	if err != nil {
 		return nil, err
 	}
 
-	token, _ := api.TokenFromContext(ctx)
-	err = h.handler.Discovery.RemoveAppID(in.AppId, token)
+	err = h.handler.Discovery.RemoveAppID(in.AppID, token)
 	if err != nil {
-		h.handler.Ctx.WithField("AppID", in.AppId).WithError(errors.FromGRPCError(err)).Warn("Could not unregister Application from Discovery")
+		h.handler.Ctx.WithField("AppID", in.AppID).WithError(errors.FromGRPCError(err)).Warn("Could not unregister Application from Discovery")
 	}
 
-	return &empty.Empty{}, nil
+	return &gogo.Empty{}, nil
 }
 
 func (h *handlerManager) GetPrefixes(ctx context.Context, in *pb_lorawan.PrefixesRequest) (*pb_lorawan.PrefixesResponse, error) {
@@ -537,19 +495,19 @@ func (h *handlerManager) GetDevAddr(ctx context.Context, in *pb_lorawan.DevAddrR
 	return res, nil
 }
 
-func (h *handlerManager) GetStatus(ctx context.Context, in *pb.StatusRequest) (*pb.Status, error) {
-	if h.handler.Identity.Id != "dev" {
+func (h *handlerManager) GetStatus(ctx context.Context, in *pb_handler.StatusRequest) (*pb_handler.Status, error) {
+	if h.handler.Identity.ID != "dev" {
 		claims, err := h.handler.ValidateTTNAuthContext(ctx)
 		if err != nil {
 			return nil, errors.Wrap(err, "No access")
 		}
-		if !claims.ComponentAccess(h.handler.Identity.Id) {
-			return nil, errors.NewErrPermissionDenied(fmt.Sprintf("Claims do not grant access to %s", h.handler.Identity.Id))
+		if !claims.ComponentAccess(h.handler.Identity.ID) {
+			return nil, errors.NewErrPermissionDenied(fmt.Sprintf("Claims do not grant access to %s", h.handler.Identity.ID))
 		}
 	}
 	status := h.handler.GetStatus()
 	if status == nil {
-		return new(pb.Status), nil
+		return new(pb_handler.Status), nil
 	}
 	return status, nil
 }
@@ -557,14 +515,13 @@ func (h *handlerManager) GetStatus(ctx context.Context, in *pb.StatusRequest) (*
 func (h *handler) RegisterManager(s *grpc.Server) {
 	server := &handlerManager{
 		handler:        h,
-		deviceManager:  pb_lorawan.NewDeviceManagerClient(h.ttnBrokerConn),
 		devAddrManager: pb_lorawan.NewDevAddrManagerClient(h.ttnBrokerConn),
 	}
 
 	server.applicationRate = ratelimit.NewRegistry(5000, time.Hour)
 	server.clientRate = ratelimit.NewRegistry(5000, time.Hour)
 
-	pb.RegisterHandlerManagerServer(s, server)
-	pb.RegisterApplicationManagerServer(s, server)
+	pb_handler.RegisterHandlerManagerServer(s, server)
+	pb_handler.RegisterApplicationManagerServer(s, server)
 	pb_lorawan.RegisterDevAddrManagerServer(s, server)
 }

@@ -9,9 +9,10 @@ type GatewayMetadata struct {
 	GtwTrusted bool     `json:"gtw_trusted,omitempty"`
 	Timestamp  uint32   `json:"timestamp,omitempty"`
 	Time       JSONTime `json:"time,omitempty"`
+	Antenna    uint8    `json:"antenna,omitempty"`
 	Channel    uint32   `json:"channel"`
-	RSSI       float32  `json:"rssi,omitempty"`
-	SNR        float32  `json:"snr,omitempty"`
-	RFChain    uint32   `json:"rf_chain,omitempty"`
+	RSSI       float32  `json:"rssi"`
+	SNR        float32  `json:"snr"`
+	RFChain    uint32   `json:"rf_chain"`
 	LocationMetadata
 }

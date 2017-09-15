@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"time"
 
+	pb_gateway "github.com/TheThingsNetwork/api/gateway"
+	pb "github.com/TheThingsNetwork/api/router"
+	"github.com/TheThingsNetwork/api/router/routerclient"
 	"github.com/TheThingsNetwork/go-account-lib/claims"
-	"github.com/TheThingsNetwork/ttn/api"
-	pb_gateway "github.com/TheThingsNetwork/ttn/api/gateway"
+	"github.com/TheThingsNetwork/go-utils/grpc/ttnctx"
 	"github.com/TheThingsNetwork/ttn/api/ratelimit"
-	pb "github.com/TheThingsNetwork/ttn/api/router"
 	"github.com/TheThingsNetwork/ttn/core/router/gateway"
 	"github.com/TheThingsNetwork/ttn/utils/errors"
 	"github.com/TheThingsNetwork/ttn/utils/random"
@@ -24,21 +25,21 @@ import (
 
 type routerRPC struct {
 	router *router
-	pb.RouterStreamServer
+	routerclient.RouterStreamServer
 
 	uplinkRate *ratelimit.Registry
 	statusRate *ratelimit.Registry
 }
 
 func (r *routerRPC) gatewayFromMetadata(md metadata.MD) (gtw *gateway.Gateway, err error) {
-	gatewayID, err := api.IDFromMetadata(md)
+	gatewayID, err := ttnctx.IDFromMetadata(md)
 	if err != nil {
 		return nil, err
 	}
 
 	authErr := errors.NewErrPermissionDenied("Gateway not authenticated")
 	authenticated := false
-	token, _ := api.TokenFromMetadata(md)
+	token, _ := ttnctx.TokenFromMetadata(md)
 
 	if token != "" {
 		if r.router.TokenKeyProvider == nil {
@@ -62,13 +63,15 @@ func (r *routerRPC) gatewayFromMetadata(md metadata.MD) (gtw *gateway.Gateway, e
 	}
 
 	gtw = r.router.getGateway(gatewayID)
-	gtw.SetAuth(token, authenticated)
+	if authenticated {
+		gtw.SetAuth(token, authenticated)
+	}
 
 	return gtw, nil
 }
 
 func (r *routerRPC) gatewayFromContext(ctx context.Context) (gtw *gateway.Gateway, err error) {
-	md := api.MetadataFromContext(ctx)
+	md := ttnctx.MetadataFromIncomingContext(ctx)
 	return r.gatewayFromMetadata(md)
 }
 
@@ -126,7 +129,7 @@ func (r *routerRPC) getDownlink(md metadata.MD) (ch <-chan *pb.DownlinkMessage, 
 	return downlinkChannel, cancel, nil
 }
 
-// Activate implements RouterServer interface (github.com/TheThingsNetwork/ttn/api/router)
+// Activate implements RouterServer interface (github.com/TheThingsNetwork/api/router)
 func (r *routerRPC) Activate(ctx context.Context, req *pb.DeviceActivationRequest) (*pb.DeviceActivationResponse, error) {
 	gateway, err := r.gatewayFromContext(ctx)
 	if err != nil {
@@ -141,7 +144,7 @@ func (r *routerRPC) Activate(ctx context.Context, req *pb.DeviceActivationReques
 	return r.router.HandleActivation(gateway.ID, req)
 }
 
-// RegisterRPC registers this router as a RouterServer (github.com/TheThingsNetwork/ttn/api/router)
+// RegisterRPC registers this router as a RouterServer (github.com/TheThingsNetwork/api/router)
 func (r *router) RegisterRPC(s *grpc.Server) {
 	server := &routerRPC{router: r}
 	server.SetLogger(r.Ctx)

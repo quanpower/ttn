@@ -4,11 +4,12 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
+	"github.com/TheThingsNetwork/api"
 	ttnlog "github.com/TheThingsNetwork/go-utils/log"
-	"github.com/TheThingsNetwork/ttn/api"
 	"github.com/TheThingsNetwork/ttn/core/types"
 	"github.com/TheThingsNetwork/ttn/ttnctl/util"
 	"github.com/spf13/cobra"
@@ -56,7 +57,7 @@ var devicesSetCmd = &cobra.Command{
 			if err != nil {
 				ctx.Fatalf("Invalid AppEUI: %s", err)
 			}
-			dev.GetLorawanDevice().AppEui = &appEUI
+			dev.GetLoRaWANDevice().AppEUI = &appEUI
 		}
 
 		if in, err := cmd.Flags().GetString("dev-eui"); err == nil && in != "" {
@@ -71,7 +72,7 @@ var devicesSetCmd = &cobra.Command{
 			if err != nil {
 				ctx.Fatalf("Invalid DevEUI: %s", err)
 			}
-			dev.GetLorawanDevice().DevEui = &devEUI
+			dev.GetLoRaWANDevice().DevEUI = &devEUI
 		}
 
 		if in, err := cmd.Flags().GetString("dev-addr"); err == nil && in != "" {
@@ -86,7 +87,7 @@ var devicesSetCmd = &cobra.Command{
 			if err != nil {
 				ctx.Fatalf("Invalid DevAddr: %s", err)
 			}
-			dev.GetLorawanDevice().DevAddr = &devAddr
+			dev.GetLoRaWANDevice().DevAddr = &devAddr
 		}
 
 		if in, err := cmd.Flags().GetString("nwk-s-key"); err == nil && in != "" {
@@ -94,7 +95,7 @@ var devicesSetCmd = &cobra.Command{
 			if err != nil {
 				ctx.Fatalf("Invalid NwkSKey: %s", err)
 			}
-			dev.GetLorawanDevice().NwkSKey = &key
+			dev.GetLoRaWANDevice().NwkSKey = &key
 		}
 
 		if in, err := cmd.Flags().GetString("app-s-key"); err == nil && in != "" {
@@ -102,7 +103,7 @@ var devicesSetCmd = &cobra.Command{
 			if err != nil {
 				ctx.Fatalf("Invalid AppSKey: %s", err)
 			}
-			dev.GetLorawanDevice().AppSKey = &key
+			dev.GetLoRaWANDevice().AppSKey = &key
 		}
 
 		if in, err := cmd.Flags().GetString("app-key"); err == nil && in != "" {
@@ -110,31 +111,31 @@ var devicesSetCmd = &cobra.Command{
 			if err != nil {
 				ctx.Fatalf("Invalid AppKey: %s", err)
 			}
-			dev.GetLorawanDevice().AppKey = &key
+			dev.GetLoRaWANDevice().AppKey = &key
 		}
 
 		if in, err := cmd.Flags().GetInt("fcnt-up"); err == nil && in != -1 {
-			dev.GetLorawanDevice().FCntUp = uint32(in)
+			dev.GetLoRaWANDevice().FCntUp = uint32(in)
 		}
 
 		if in, err := cmd.Flags().GetInt("fcnt-down"); err == nil && in != -1 {
-			dev.GetLorawanDevice().FCntDown = uint32(in)
+			dev.GetLoRaWANDevice().FCntDown = uint32(in)
 		}
 
 		if in, err := cmd.Flags().GetBool("enable-fcnt-check"); err == nil && in {
-			dev.GetLorawanDevice().DisableFCntCheck = false
+			dev.GetLoRaWANDevice().DisableFCntCheck = false
 		}
 
 		if in, err := cmd.Flags().GetBool("disable-fcnt-check"); err == nil && in {
-			dev.GetLorawanDevice().DisableFCntCheck = true
+			dev.GetLoRaWANDevice().DisableFCntCheck = true
 		}
 
 		if in, err := cmd.Flags().GetBool("32-bit-fcnt"); err == nil && in {
-			dev.GetLorawanDevice().Uses32BitFCnt = true
+			dev.GetLoRaWANDevice().Uses32BitFCnt = true
 		}
 
 		if in, err := cmd.Flags().GetBool("16-bit-fcnt"); err == nil && in {
-			dev.GetLorawanDevice().Uses32BitFCnt = false
+			dev.GetLoRaWANDevice().Uses32BitFCnt = false
 		}
 
 		if in, err := cmd.Flags().GetFloat32("latitude"); err == nil && in != 0 {
@@ -151,6 +152,26 @@ var devicesSetCmd = &cobra.Command{
 
 		if in, err := cmd.Flags().GetString("description"); err == nil && in != "" {
 			dev.Description = in
+		}
+
+		if in, err := cmd.Flags().GetStringSlice("attr-set"); err == nil && len(in) > 0 {
+			if dev.Attributes == nil {
+				dev.Attributes = make(map[string]string, len(in))
+			}
+			for _, v := range in {
+				s := strings.SplitN(v, ":", 2)
+				if len(s) == 2 {
+					dev.Attributes[s[0]] = s[1]
+				} else {
+					ctx.Error(fmt.Sprintf("attr-set: cannot parse key:value %s", s))
+				}
+			}
+		}
+
+		if in, err := cmd.Flags().GetStringSlice("attr-remove"); err == nil && len(in) > 0 {
+			for _, v := range in {
+				delete(dev.Attributes, v)
+			}
 		}
 
 		err = manager.SetDevice(dev)
@@ -190,4 +211,7 @@ func init() {
 	devicesSetCmd.Flags().Int32("altitude", 0, "Set altitude")
 
 	devicesSetCmd.Flags().String("description", "", "Set Description")
+
+	devicesSetCmd.Flags().StringSlice("attr-set", nil, "Add a device attribute (key:value)")
+	devicesSetCmd.Flags().StringSlice("attr-remove", nil, "Remove device attribute")
 }

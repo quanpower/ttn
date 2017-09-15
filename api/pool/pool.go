@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"github.com/TheThingsNetwork/go-utils/grpc/restartstream"
+	"github.com/TheThingsNetwork/go-utils/grpc/rpcerror"
+	"github.com/TheThingsNetwork/go-utils/grpc/rpclog"
 	"github.com/TheThingsNetwork/go-utils/roots"
+	"github.com/TheThingsNetwork/ttn/utils/errors"
+	"github.com/mwitkow/go-grpc-middleware"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -67,7 +71,15 @@ func KeepAliveDialer(addr string, timeout time.Duration) (net.Conn, error) {
 
 // DefaultDialOptions for connecting with servers
 var DefaultDialOptions = []grpc.DialOption{
-	grpc.WithStreamInterceptor(restartstream.Interceptor(restartstream.DefaultSettings)),
+	grpc.WithUnaryInterceptor(grpc_middleware.ChainUnaryClient(
+		rpcerror.UnaryClientInterceptor(errors.FromGRPCError),
+		rpclog.UnaryClientInterceptor(nil),
+	)),
+	grpc.WithStreamInterceptor(grpc_middleware.ChainStreamClient(
+		rpcerror.StreamClientInterceptor(errors.FromGRPCError),
+		restartstream.Interceptor(restartstream.DefaultSettings),
+		rpclog.StreamClientInterceptor(nil),
+	)),
 	grpc.WithDialer(KeepAliveDialer),
 	grpc.WithBlock(),
 }
@@ -113,6 +125,23 @@ func (p *Pool) Close(target ...string) {
 			delete(p.conns, target)
 		}
 	}
+}
+
+// CloseConn closes a connection.
+func (p *Pool) CloseConn(conn *grpc.ClientConn) {
+	var target string
+	p.mu.Lock()
+	for t, c := range p.conns {
+		if c.conn == conn {
+			target = t
+			break
+		}
+	}
+	p.mu.Unlock()
+	if target != "" {
+		p.Close(target)
+	}
+	return
 }
 
 func (p *Pool) dial(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {

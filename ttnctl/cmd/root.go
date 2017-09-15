@@ -6,13 +6,14 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	cliHandler "github.com/TheThingsNetwork/go-utils/handlers/cli"
 	ttnlog "github.com/TheThingsNetwork/go-utils/log"
 	"github.com/TheThingsNetwork/go-utils/log/apex"
 	"github.com/TheThingsNetwork/go-utils/log/grpc"
-	"github.com/TheThingsNetwork/ttn/api"
+	ttnapi "github.com/TheThingsNetwork/ttn/api"
 	"github.com/TheThingsNetwork/ttn/ttnctl/util"
 	"github.com/apex/log"
 	"github.com/spf13/cobra"
@@ -50,7 +51,7 @@ var RootCmd = &cobra.Command{
 		grpclog.SetLogger(grpc.Wrap(ttnlog.Get()))
 
 		if viper.GetBool("allow-insecure") {
-			api.AllowInsecureFallback = true
+			ttnapi.AllowInsecureFallback = true
 		}
 	},
 }
@@ -85,7 +86,7 @@ func init() {
 }
 
 func assertArgsLength(cmd *cobra.Command, args []string, min, max int) {
-	if len(args) < min || len(args) > max {
+	if len(args) < min || (max != 0 && len(args) > max) {
 		ctx.Errorf(`Invalid number of arguments to command "%s"`, cmd.CommandPath())
 		fmt.Println()
 		cmd.Example = ""
@@ -95,6 +96,12 @@ func assertArgsLength(cmd *cobra.Command, args []string, min, max int) {
 }
 
 func printKV(key, t interface{}) {
+	if reflect.TypeOf(t).Kind() == reflect.Ptr {
+		if reflect.ValueOf(t).IsNil() {
+			return
+		}
+		t = reflect.Indirect(reflect.ValueOf(t)).Interface()
+	}
 	var val string
 	switch t := t.(type) {
 	case []byte:
@@ -108,9 +115,17 @@ func printKV(key, t interface{}) {
 	}
 }
 
+func printBool(key string, value bool, truthy, falsey string) {
+	if value {
+		printKV(key, truthy)
+	} else {
+		printKV(key, falsey)
+	}
+}
+
 func crop(in string, length int) string {
 	if len(in) > length {
-		return in[:length]
+		return in[:length-3] + "..."
 	}
 	return in
 }

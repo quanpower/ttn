@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TheThingsNetwork/ttn/api"
+	"github.com/TheThingsNetwork/api"
 	"github.com/TheThingsNetwork/ttn/ttnctl/util"
 	"github.com/spf13/cobra"
 )
@@ -63,8 +63,8 @@ var devicesInfoCmd = &cobra.Command{
 
 		fmt.Println()
 
-		fmt.Printf("  Application ID: %s\n", dev.AppId)
-		fmt.Printf("       Device ID: %s\n", dev.DevId)
+		fmt.Printf("  Application ID: %s\n", dev.AppID)
+		fmt.Printf("       Device ID: %s\n", dev.DevID)
 
 		if dev.Description != "" {
 			fmt.Printf("     Description: %s\n", dev.Description)
@@ -74,7 +74,7 @@ var devicesInfoCmd = &cobra.Command{
 			fmt.Printf("        Location: %f,%f\n", dev.Latitude, dev.Longitude)
 		}
 
-		if lorawan := dev.GetLorawanDevice(); lorawan != nil {
+		if lorawan := dev.GetLoRaWANDevice(); lorawan != nil {
 			lastSeen := "never"
 			if lorawan.LastSeen > 0 {
 				lastSeen = fmt.Sprintf("%s", time.Unix(0, 0).Add(time.Duration(lorawan.LastSeen)))
@@ -84,8 +84,12 @@ var devicesInfoCmd = &cobra.Command{
 			fmt.Println()
 			fmt.Println("    LoRaWAN Info:")
 			fmt.Println()
-			fmt.Printf("     AppEUI: %s\n", formatBytes(lorawan.AppEui, byteFormat))
-			fmt.Printf("     DevEUI: %s\n", formatBytes(lorawan.DevEui, byteFormat))
+			fmt.Printf("     AppEUI: %s\n", formatBytes(lorawan.AppEUI, byteFormat))
+			devEUI := formatBytes(lorawan.DevEUI, byteFormat)
+			if lorawan.DevEUI.IsEmpty() {
+				devEUI = "register on join"
+			}
+			fmt.Printf("     DevEUI: %s\n", devEUI)
 			fmt.Printf("    DevAddr: %s\n", formatBytes(lorawan.DevAddr, byteFormat))
 			fmt.Printf("     AppKey: %s\n", formatBytes(lorawan.AppKey, byteFormat))
 			fmt.Printf("    AppSKey: %s\n", formatBytes(lorawan.AppSKey, byteFormat))
@@ -107,6 +111,13 @@ var devicesInfoCmd = &cobra.Command{
 			fmt.Printf("    Options: %s\n", strings.Join(options, ", "))
 		}
 
+		if len(dev.Attributes) != 0 {
+			fmt.Println()
+			fmt.Println(" Attributes:")
+			for k, v := range dev.Attributes {
+				printKV(k, v)
+			}
+		}
 	},
 }
 

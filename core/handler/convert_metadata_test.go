@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	pb_broker "github.com/TheThingsNetwork/ttn/api/broker"
-	pb_gateway "github.com/TheThingsNetwork/ttn/api/gateway"
-	pb_protocol "github.com/TheThingsNetwork/ttn/api/protocol"
-	pb_lorawan "github.com/TheThingsNetwork/ttn/api/protocol/lorawan"
+	pb_broker "github.com/TheThingsNetwork/api/broker"
+	pb_gateway "github.com/TheThingsNetwork/api/gateway"
+	pb_protocol "github.com/TheThingsNetwork/api/protocol"
+	pb_lorawan "github.com/TheThingsNetwork/api/protocol/lorawan"
 	"github.com/TheThingsNetwork/ttn/core/component"
 	"github.com/TheThingsNetwork/ttn/core/handler/device"
 	"github.com/TheThingsNetwork/ttn/core/types"
@@ -37,19 +37,23 @@ func TestConvertMetadata(t *testing.T) {
 	gtwID := "eui-0102030405060708"
 	ttnUp.GatewayMetadata = []*pb_gateway.RxMetadata{
 		&pb_gateway.RxMetadata{
-			GatewayId: gtwID,
+			GatewayID: gtwID,
 		},
 		&pb_gateway.RxMetadata{
-			GatewayId: gtwID,
+			GatewayID: gtwID,
+			Antennas: []*pb_gateway.RxMetadata_Antenna{
+				&pb_gateway.RxMetadata_Antenna{},
+				&pb_gateway.RxMetadata_Antenna{},
+			},
 		},
 	}
 
 	err = h.ConvertMetadata(h.Ctx, ttnUp, appUp, device)
 	a.So(err, ShouldBeNil)
-	a.So(appUp.Metadata.Gateways, ShouldHaveLength, 2)
+	a.So(appUp.Metadata.Gateways, ShouldHaveLength, 3)
 
-	ttnUp.ProtocolMetadata = &pb_protocol.RxMetadata{Protocol: &pb_protocol.RxMetadata_Lorawan{
-		Lorawan: &pb_lorawan.Metadata{
+	ttnUp.ProtocolMetadata = &pb_protocol.RxMetadata{Protocol: &pb_protocol.RxMetadata_LoRaWAN{
+		LoRaWAN: &pb_lorawan.Metadata{
 			DataRate: "SF7BW125",
 		},
 	}}
@@ -59,7 +63,7 @@ func TestConvertMetadata(t *testing.T) {
 	a.So(appUp.Metadata.DataRate, ShouldEqual, "SF7BW125")
 
 	ttnUp.GatewayMetadata[0].Time = 1465831736000000000
-	ttnUp.GatewayMetadata[0].Gps = &pb_gateway.GPSMetadata{
+	ttnUp.GatewayMetadata[0].Location = &pb_gateway.LocationMetadata{
 		Latitude: 42,
 	}
 

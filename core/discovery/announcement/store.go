@@ -21,7 +21,11 @@ type Store interface {
 	ListService(serviceName string, opts *storage.ListOptions) ([]*Announcement, error)
 	Get(serviceName, serviceID string) (*Announcement, error)
 	GetMetadata(serviceName, serviceID string) ([]Metadata, error)
+	getForAppID(appID string) (serviceName, serviceID string, err error)
 	GetForAppID(appID string) (*Announcement, error)
+	getForGatewayID(gatewayID string) (serviceName, serviceID string, err error)
+	GetForGatewayID(gatewayID string) (*Announcement, error)
+	getForAppEUI(appEUI types.AppEUI) (serviceName, serviceID string, err error)
 	GetForAppEUI(appEUI types.AppEUI) (*Announcement, error)
 	Set(new *Announcement) error
 	AddMetadata(serviceName, serviceID string, metadata ...Metadata) error
@@ -35,6 +39,7 @@ const redisAnnouncementPrefix = "announcement"
 const redisMetadataPrefix = "metadata"
 const redisAppIDPrefix = "app_id"
 const redisAppEUIPrefix = "app_eui"
+const redisGatewayIDPrefix = "gateway_id"
 
 // NewRedisAnnouncementStore creates a new Redis-based Announcement store
 func NewRedisAnnouncementStore(client *redis.Client, prefix string) Store {
@@ -47,10 +52,11 @@ func NewRedisAnnouncementStore(client *redis.Client, prefix string) Store {
 		store.AddMigration(v, f)
 	}
 	return &RedisAnnouncementStore{
-		store:    store,
-		metadata: storage.NewRedisSetStore(client, prefix+":"+redisMetadataPrefix),
-		byAppID:  storage.NewRedisKVStore(client, prefix+":"+redisAppIDPrefix),
-		byAppEUI: storage.NewRedisKVStore(client, prefix+":"+redisAppEUIPrefix),
+		store:       store,
+		metadata:    storage.NewRedisSetStore(client, prefix+":"+redisMetadataPrefix),
+		byAppID:     storage.NewRedisKVStore(client, prefix+":"+redisAppIDPrefix),
+		byAppEUI:    storage.NewRedisKVStore(client, prefix+":"+redisAppEUIPrefix),
+		byGatewayID: storage.NewRedisKVStore(client, prefix+":"+redisGatewayIDPrefix),
 	}
 }
 
@@ -59,10 +65,11 @@ func NewRedisAnnouncementStore(client *redis.Client, prefix string) Store {
 // - Metadata is stored in a Set
 // - AppIDs and AppEUIs are indexed with key/value pairs
 type RedisAnnouncementStore struct {
-	store    *storage.RedisMapStore
-	metadata *storage.RedisSetStore
-	byAppID  *storage.RedisKVStore
-	byAppEUI *storage.RedisKVStore
+	store       *storage.RedisMapStore
+	metadata    *storage.RedisSetStore
+	byAppID     *storage.RedisKVStore
+	byAppEUI    *storage.RedisKVStore
+	byGatewayID *storage.RedisKVStore
 }
 
 // List all Announcements
@@ -137,24 +144,58 @@ func (s *RedisAnnouncementStore) GetMetadata(serviceName, serviceID string) ([]M
 	return out, nil
 }
 
-// GetForAppID returns the last Announcement that contains metadata for the given AppID
-func (s *RedisAnnouncementStore) GetForAppID(appID string) (*Announcement, error) {
-	key, err := s.byAppID.Get(appID)
+func (s *RedisAnnouncementStore) getForGatewayID(gatewayID string) (string, string, error) {
+	key, err := s.byGatewayID.Get(gatewayID)
+	if err != nil {
+		return "", "", err
+	}
+	service := strings.Split(key, ":")
+	return service[0], service[1], nil
+}
+
+// GetForGatewayID returns the last Announcement that contains metadata for the given GatewayID
+func (s *RedisAnnouncementStore) GetForGatewayID(gatewayID string) (*Announcement, error) {
+	serviceName, serviceID, err := s.getForGatewayID(gatewayID)
 	if err != nil {
 		return nil, err
 	}
+	return s.Get(serviceName, serviceID)
+}
+
+func (s *RedisAnnouncementStore) getForAppID(appID string) (string, string, error) {
+	key, err := s.byAppID.Get(appID)
+	if err != nil {
+		return "", "", err
+	}
 	service := strings.Split(key, ":")
-	return s.Get(service[0], service[1])
+	return service[0], service[1], nil
+}
+
+// GetForAppID returns the last Announcement that contains metadata for the given AppID
+func (s *RedisAnnouncementStore) GetForAppID(appID string) (*Announcement, error) {
+	serviceName, serviceID, err := s.getForAppID(appID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(serviceName, serviceID)
+}
+
+func (s *RedisAnnouncementStore) getForAppEUI(appEUI types.AppEUI) (string, string, error) {
+	key, err := s.byAppEUI.Get(appEUI.String())
+	if err != nil {
+		return "", "", err
+	}
+	service := strings.Split(key, ":")
+	return service[0], service[1], nil
 }
 
 // GetForAppEUI returns the last Announcement that contains metadata for the given AppEUI
 func (s *RedisAnnouncementStore) GetForAppEUI(appEUI types.AppEUI) (*Announcement, error) {
-	key, err := s.byAppEUI.Get(appEUI.String())
+	serviceName, serviceID, err := s.getForAppEUI(appEUI)
 	if err != nil {
 		return nil, err
 	}
-	service := strings.Split(key, ":")
-	return s.Get(service[0], service[1])
+	return s.Get(serviceName, serviceID)
 }
 
 // Set a new Announcement or update an existing one
@@ -203,6 +244,23 @@ func (s *RedisAnnouncementStore) AddMetadata(serviceName, serviceID string, meta
 					return err
 				}
 			}
+		case GatewayIDMetadata:
+			existing, err := s.byGatewayID.Get(meta.GatewayID)
+			switch {
+			case errors.GetErrType(err) == errors.NotFound:
+				if err := s.byGatewayID.Create(meta.GatewayID, key); err != nil {
+					return err
+				}
+			case err != nil:
+				return err
+			case existing == key:
+				continue
+			default:
+				go s.metadata.Remove(existing, string(txt))
+				if err := s.byGatewayID.Update(meta.GatewayID, key); err != nil {
+					return err
+				}
+			}
 		case AppEUIMetadata:
 			existing, err := s.byAppEUI.Get(meta.AppEUI.String())
 			switch {
@@ -239,6 +297,8 @@ func (s *RedisAnnouncementStore) RemoveMetadata(serviceName, serviceID string, m
 		switch meta := meta.(type) {
 		case AppIDMetadata:
 			s.byAppID.Delete(meta.AppID)
+		case GatewayIDMetadata:
+			s.byGatewayID.Delete(meta.GatewayID)
 		case AppEUIMetadata:
 			s.byAppEUI.Delete(meta.AppEUI.String())
 		}

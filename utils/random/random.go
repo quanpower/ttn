@@ -6,7 +6,6 @@ package random
 import (
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/TheThingsNetwork/go-utils/pseudorandom"
@@ -28,45 +27,42 @@ func New() *TTNRandom {
 
 var global = New()
 
-func (r *TTNRandom) randomChar() byte {
-	return byte('a' + r.Intn('z'-'a'))
-}
-func (r *TTNRandom) randomCharString() string {
-	return string(r.randomChar())
+const validIDChars = "abcdefghijklmnopqrstuvwxyz1234567890"
+
+func (r *TTNRandom) randomChar(alphabet string) byte { return alphabet[r.Intn(len(alphabet))] }
+
+func (r *TTNRandom) randomChars(alphabet string, chars int) []byte {
+	o := make([]byte, chars)
+	for n := 0; n < chars; n++ {
+		o[n] = r.randomChar(alphabet)
+	}
+	return o
 }
 
-func (r *TTNRandom) formatID(s string) string {
-	switch {
-	case strings.HasPrefix(s, "-"):
-		s = strings.TrimPrefix(s, "-") + r.randomCharString()
-	case strings.HasPrefix(s, "_"):
-		s = strings.TrimPrefix(s, "_") + r.randomCharString()
-	case strings.HasSuffix(s, "-"):
-		s = strings.TrimSuffix(s, "-") + r.randomCharString()
-	case strings.HasSuffix(s, "_"):
-		s = strings.TrimSuffix(s, "_") + r.randomCharString()
+func (r *TTNRandom) id(length int) string {
+	o := r.randomChars(validIDChars, length)
+	for n := 0; n < length/8; n++ { // max 1 out of 8 will be a dash/underscore
+		l := 1 + r.Intn(length-2)
+		if o[l-1] != '_' && o[l-1] != '-' && o[l+1] != '_' && o[l+1] != '-' {
+			o[l] = r.randomChar("-_")
+		}
 	}
-	return strings.ToLower(strings.NewReplacer(
-		"_-", r.randomCharString()+r.randomCharString(),
-		"-_", r.randomCharString()+r.randomCharString(),
-		"__", r.randomCharString()+r.randomCharString(),
-		"--", r.randomCharString()+r.randomCharString(),
-	).Replace(s))
+	return string(o)
 }
 
 // ID returns randomly generated ID
 func (r *TTNRandom) ID() string {
-	return r.formatID(r.Interface.String(2 + r.Interface.Intn(61)))
+	return r.id(2 + r.Intn(35))
 }
 
 // AppID returns randomly generated AppID
 func (r *TTNRandom) AppID() string {
-	return r.formatID(r.Interface.String(2 + r.Interface.Intn(34)))
+	return r.ID()
 }
 
 // DevID returns randomly generated DevID
 func (r *TTNRandom) DevID() string {
-	return r.formatID(r.Interface.String(2 + r.Interface.Intn(34)))
+	return r.ID()
 }
 
 // Bool return randomly generated bool value
@@ -74,8 +70,8 @@ func (r *TTNRandom) Bool() bool {
 	return r.Interface.Intn(2) == 0
 }
 
-// Rssi generates RSSI signal between -120 < rssi < 0
-func (r *TTNRandom) Rssi() int32 {
+// RSSI generates RSSI signal between -120 < rssi < 0
+func (r *TTNRandom) RSSI() int32 {
 	// Generate RSSI. Tend towards generating great signal strength.
 	x := float64(r.Interface.Intn(math.MaxInt32)) * float64(2e-9)
 	return int32(-1.6 * math.Exp(x))
@@ -131,8 +127,8 @@ func (r *TTNRandom) Codr() string {
 	return fmt.Sprintf("4/%d", d)
 }
 
-// Lsnr generates LoRa SNR ratio in db. Tend towards generating good ratio with low noise
-func (r *TTNRandom) Lsnr() float32 {
+// LSNR generates LoRa SNR ratio in db. Tend towards generating good ratio with low noise
+func (r *TTNRandom) LSNR() float32 {
 	x := float64(r.Interface.Intn(math.MaxInt32)) * float64(2e-9)
 	return float32(math.Floor((-0.1*math.Exp(x)+5.5)*10) / 10)
 }
@@ -164,9 +160,9 @@ func (r *TTNRandom) AppEUI() (eui types.AppEUI) {
 	return types.AppEUI(r.EUI64())
 }
 
-// Rssi generates RSSI signal between -120 < rssi < 0
-func Rssi() int32 {
-	return global.Rssi()
+// RSSI generates RSSI signal between -120 < rssi < 0
+func RSSI() int32 {
+	return global.RSSI()
 }
 
 // Freq generates a frequency between 865.0 and 870.0 Mhz
@@ -184,9 +180,9 @@ func Codr() string {
 	return global.Codr()
 }
 
-// Lsnr generates LoRa SNR ratio in db. Tend towards generating good ratio with low noise
-func Lsnr() float32 {
-	return global.Lsnr()
+// LSNR generates LoRa SNR ratio in db. Tend towards generating good ratio with low noise
+func LSNR() float32 {
+	return global.LSNR()
 }
 
 // Intn returns random int with max n

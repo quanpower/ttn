@@ -7,15 +7,16 @@ import (
 	"fmt"
 	"time"
 
+	pb "github.com/TheThingsNetwork/api/broker"
+	"github.com/TheThingsNetwork/api/discovery"
+	"github.com/TheThingsNetwork/api/protocol/lorawan"
+	pb_lorawan "github.com/TheThingsNetwork/api/protocol/lorawan"
 	"github.com/TheThingsNetwork/go-account-lib/claims"
 	"github.com/TheThingsNetwork/go-account-lib/rights"
-	pb "github.com/TheThingsNetwork/ttn/api/broker"
-	"github.com/TheThingsNetwork/ttn/api/discovery"
-	"github.com/TheThingsNetwork/ttn/api/protocol/lorawan"
-	pb_lorawan "github.com/TheThingsNetwork/ttn/api/protocol/lorawan"
+	"github.com/TheThingsNetwork/go-utils/grpc/ttnctx"
 	"github.com/TheThingsNetwork/ttn/api/ratelimit"
 	"github.com/TheThingsNetwork/ttn/utils/errors"
-	"github.com/golang/protobuf/ptypes/empty"
+	"github.com/gogo/protobuf/types"
 	"golang.org/x/net/context" // See https://github.com/grpc/grpc-go/issues/711"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,36 +44,39 @@ func (b *brokerManager) GetDevice(ctx context.Context, in *lorawan.DeviceIdentif
 	if _, err := b.validateClient(ctx); err != nil {
 		return nil, err
 	}
-	res, err := b.deviceManager.GetDevice(ctx, in)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	res, err := b.deviceManager.GetDevice(ttnctx.OutgoingContextWithToken(ctx, token), in)
 	if err != nil {
 		return nil, errors.Wrap(errors.FromGRPCError(err), "NetworkServer did not return device")
 	}
 	return res, nil
 }
 
-func (b *brokerManager) SetDevice(ctx context.Context, in *lorawan.Device) (*empty.Empty, error) {
+func (b *brokerManager) SetDevice(ctx context.Context, in *lorawan.Device) (*types.Empty, error) {
 	if _, err := b.validateClient(ctx); err != nil {
 		return nil, err
 	}
-	res, err := b.deviceManager.SetDevice(ctx, in)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	res, err := b.deviceManager.SetDevice(ttnctx.OutgoingContextWithToken(ctx, token), in)
 	if err != nil {
 		return nil, errors.Wrap(errors.FromGRPCError(err), "NetworkServer did not set device")
 	}
 	return res, nil
 }
 
-func (b *brokerManager) DeleteDevice(ctx context.Context, in *lorawan.DeviceIdentifier) (*empty.Empty, error) {
+func (b *brokerManager) DeleteDevice(ctx context.Context, in *lorawan.DeviceIdentifier) (*types.Empty, error) {
 	if _, err := b.validateClient(ctx); err != nil {
 		return nil, err
 	}
-	res, err := b.deviceManager.DeleteDevice(ctx, in)
+	token, _ := ttnctx.TokenFromIncomingContext(ctx)
+	res, err := b.deviceManager.DeleteDevice(ttnctx.OutgoingContextWithToken(ctx, token), in)
 	if err != nil {
 		return nil, errors.Wrap(errors.FromGRPCError(err), "NetworkServer did not delete device")
 	}
 	return res, nil
 }
 
-func (b *brokerManager) RegisterApplicationHandler(ctx context.Context, in *pb.ApplicationHandlerRegistration) (*empty.Empty, error) {
+func (b *brokerManager) RegisterApplicationHandler(ctx context.Context, in *pb.ApplicationHandlerRegistration) (*types.Empty, error) {
 	claims, err := b.broker.Component.ValidateTTNAuthContext(ctx)
 	if err != nil {
 		return nil, err
@@ -80,18 +84,18 @@ func (b *brokerManager) RegisterApplicationHandler(ctx context.Context, in *pb.A
 	if err := in.Validate(); err != nil {
 		return nil, errors.Wrap(err, "Invalid Application Handler Registration")
 	}
-	if !claims.AppRight(in.AppId, rights.AppSettings) {
+	if !claims.AppRight(in.AppID, rights.AppSettings) {
 		return nil, errors.NewErrPermissionDenied("No access to this application")
 	}
 	// Add Handler in local cache
-	handler, err := b.broker.Discovery.Get("handler", in.HandlerId)
+	handler, err := b.broker.Discovery.Get("handler", in.HandlerID)
 	if err != nil {
 		return nil, errors.NewErrInternal("Could not get Handler Announcement")
 	}
-	handler.Metadata = append(handler.Metadata, &discovery.Metadata{Metadata: &discovery.Metadata_AppId{
-		AppId: in.AppId,
+	handler.Metadata = append(handler.Metadata, &discovery.Metadata{Metadata: &discovery.Metadata_AppID{
+		AppID: in.AppID,
 	}})
-	return &empty.Empty{}, nil
+	return &types.Empty{}, nil
 }
 
 func (b *brokerManager) GetPrefixes(ctx context.Context, in *lorawan.PrefixesRequest) (*lorawan.PrefixesResponse, error) {
@@ -111,13 +115,13 @@ func (b *brokerManager) GetDevAddr(ctx context.Context, in *lorawan.DevAddrReque
 }
 
 func (b *brokerManager) GetStatus(ctx context.Context, in *pb.StatusRequest) (*pb.Status, error) {
-	if b.broker.Identity.Id != "dev" {
+	if b.broker.Identity.ID != "dev" {
 		claims, err := b.broker.ValidateTTNAuthContext(ctx)
 		if err != nil {
 			return nil, errors.Wrap(err, "No access")
 		}
-		if !claims.ComponentAccess(b.broker.Identity.Id) {
-			return nil, errors.NewErrPermissionDenied(fmt.Sprintf("Claims do not grant access to %s", b.broker.Identity.Id))
+		if !claims.ComponentAccess(b.broker.Identity.ID) {
+			return nil, errors.NewErrPermissionDenied(fmt.Sprintf("Claims do not grant access to %s", b.broker.Identity.ID))
 		}
 	}
 	status := b.broker.GetStatus()

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -73,9 +72,21 @@ var RootCmd = &cobra.Command{
 			esClient.HTTPClient = &http.Client{
 				Timeout: 5 * time.Second,
 			}
+
+			esUsername := viper.GetString("elasticsearch-username")
+			esPassword := viper.GetString("elasticsearch-password")
+			if esUsername != "" {
+				esClient.SetAuthCredentials(esUsername, esPassword)
+			}
+
+			esPrefix := cmd.Name()
+			if prefix := viper.GetString("elasticsearch-prefix"); prefix != "" {
+				esPrefix = fmt.Sprintf("%s-%s", prefix, esPrefix)
+			}
+
 			logHandlers = append(logHandlers, levelHandler.New(esHandler.New(&esHandler.Config{
 				Client:     esClient,
-				Prefix:     cmd.Name(),
+				Prefix:     esPrefix,
 				BufferSize: 10,
 			}), logLevel))
 		}
@@ -109,14 +120,6 @@ var RootCmd = &cobra.Command{
 // Execute adds all child commands to the root command sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	defer func() {
-		buf := make([]byte, 1<<16)
-		runtime.Stack(buf, false)
-		if thePanic := recover(); thePanic != nil && ctx != nil {
-			ctx.WithField("panic", thePanic).WithField("stack", string(buf)).Fatal("Stopping because of panic")
-		}
-	}()
-
 	if err := RootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(-1)
@@ -131,6 +134,9 @@ func init() {
 	RootCmd.PersistentFlags().Bool("no-cli-logs", false, "Disable CLI logs")
 	RootCmd.PersistentFlags().String("log-file", "", "Location of the log file")
 	RootCmd.PersistentFlags().String("elasticsearch", "", "Location of Elasticsearch server for logging")
+	RootCmd.PersistentFlags().String("elasticsearch-prefix", "", "Prefix of the ES index for logging - changes the index from \"<component>-<date>\" to \"<prefix>-<component>-<date>\"")
+	RootCmd.PersistentFlags().String("elasticsearch-username", "", "Username used to connect to the Elasticsearch server")
+	RootCmd.PersistentFlags().String("elasticsearch-password", "", "Password used to connect to the Elasticsearch server")
 
 	RootCmd.PersistentFlags().String("id", "", "The id of this component")
 	RootCmd.PersistentFlags().String("description", "", "The description of this component")
@@ -140,6 +146,8 @@ func init() {
 	RootCmd.PersistentFlags().String("auth-token", "", "The JWT token to be used for the discovery server")
 
 	RootCmd.PersistentFlags().Int("health-port", 0, "The port number where the health server should be started")
+
+	RootCmd.PersistentFlags().Duration("monitor-interval", 6*time.Second, "The interval between sending component statuses to the monitor servers")
 
 	viper.SetDefault("auth-servers", map[string]string{
 		"ttn-account-v2": "https://account.thethingsnetwork.org",

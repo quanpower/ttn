@@ -13,7 +13,6 @@ import (
 
 	"github.com/TheThingsNetwork/go-utils/log/apex"
 	"github.com/TheThingsNetwork/ttn/core/types"
-	"github.com/apex/log"
 	. "github.com/smartystreets/assertions"
 )
 
@@ -94,9 +93,13 @@ func TestConnect(t *testing.T) {
 }
 
 func TestConnectWithTLS(t *testing.T) {
+	if sslHost == "SKIP" {
+		t.Skip("Skipping MQTT/TLS test")
+	}
+
 	a := New(t)
 
-	cert, err := ioutil.ReadFile("../.env/mqtt/ca.cert")
+	cert, err := ioutil.ReadFile("../.env/mqtt/ca.pem")
 	if err != nil {
 		t.Errorf("MQTT CA Cert could not be loaded")
 	}
@@ -170,7 +173,7 @@ func TestRandomTopicPublish(t *testing.T) {
 }
 
 func ExampleNewClient() {
-	ctx := apex.Wrap(log.WithField("Example", "NewClient"))
+	ctx := apex.Stdout().WithField("Example", "NewClient")
 	exampleClient := NewClient(ctx, "ttnctl", "my-app-id", "my-access-key", "eu.thethings.network:1883")
 	err := exampleClient.Connect()
 	if err != nil {

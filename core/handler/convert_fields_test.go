@@ -6,9 +6,10 @@ package handler
 import (
 	"testing"
 
-	pb_broker "github.com/TheThingsNetwork/ttn/api/broker"
+	pb_broker "github.com/TheThingsNetwork/api/broker"
 
 	"github.com/TheThingsNetwork/ttn/core/handler/application"
+	"github.com/TheThingsNetwork/ttn/core/handler/device"
 	"github.com/TheThingsNetwork/ttn/core/types"
 	. "github.com/TheThingsNetwork/ttn/utils/testing"
 	. "github.com/smartystreets/assertions"
@@ -16,8 +17,8 @@ import (
 
 func buildCustomUplink(appID string) (*pb_broker.DeduplicatedUplinkMessage, *types.UplinkMessage) {
 	ttnUp := &pb_broker.DeduplicatedUplinkMessage{
-		AppId: appID,
-		DevId: "DevID-1",
+		AppID: appID,
+		DevID: "DevID-1",
 	}
 	appUp := &types.UplinkMessage{
 		FPort:      1,
@@ -26,6 +27,10 @@ func buildCustomUplink(appID string) (*pb_broker.DeduplicatedUplinkMessage, *typ
 		PayloadRaw: []byte{0x08, 0x70},
 	}
 	return ttnUp, appUp
+}
+
+var attributes = map[string]string{
+	"ttn-model": "The Things Uno",
 }
 
 func TestConvertFieldsUpCustom(t *testing.T) {
@@ -37,10 +42,13 @@ func TestConvertFieldsUpCustom(t *testing.T) {
 		qEvent:       make(chan *types.DeviceEvent, 1),
 	}
 
+	dev := new(device.Device)
+	dev.Attributes = attributes
+
 	// No functions
 	{
 		ttnUp, appUp := buildCustomUplink(appID)
-		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, nil)
+		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, dev)
 		a.So(err, ShouldBeNil)
 		a.So(appUp.PayloadFields, ShouldBeEmpty)
 	}
@@ -58,11 +66,12 @@ func TestConvertFieldsUpCustom(t *testing.T) {
 			h.applications.Delete(appID)
 		}()
 		ttnUp, appUp := buildCustomUplink(appID)
-		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, nil)
+		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, dev)
 		a.So(err, ShouldBeNil)
 		a.So(appUp.PayloadFields, ShouldResemble, map[string]interface{}{
 			"temperature": 21.6,
 		})
+		a.So(appUp.Attributes, ShouldResemble, attributes)
 	}
 
 	// Invalidate data
@@ -71,7 +80,7 @@ func TestConvertFieldsUpCustom(t *testing.T) {
 		app.CustomValidator = `function Validator (data) { return false; }`
 		h.applications.Set(app)
 		ttnUp, appUp := buildCustomUplink(appID)
-		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, nil)
+		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, dev)
 		a.So(err, ShouldNotBeNil)
 		a.So(appUp.PayloadFields, ShouldBeEmpty)
 	}
@@ -82,7 +91,7 @@ func TestConvertFieldsUpCustom(t *testing.T) {
 		app.CustomValidator = `function Validator (data) { throw new Error("expected"); }`
 		h.applications.Set(app)
 		ttnUp, appUp := buildCustomUplink(appID)
-		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, nil)
+		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, dev)
 		a.So(err, ShouldBeNil)
 		a.So(appUp.PayloadFields, ShouldBeEmpty)
 		a.So(len(h.qEvent), ShouldEqual, 1)
@@ -90,12 +99,29 @@ func TestConvertFieldsUpCustom(t *testing.T) {
 		_, ok := evt.Data.(types.ErrorEventData)
 		a.So(ok, ShouldBeTrue)
 	}
+
+	// Invalid output error
+	{
+		app.StartUpdate()
+		app.CustomValidator = ""
+		app.CustomDecoder = `function Decoder (data) { return { infinite: 10/0 }; }`
+		h.applications.Set(app)
+		ttnUp, appUp := buildCustomUplink(appID)
+		err := h.ConvertFieldsUp(GetLogger(t, "TestConvertFieldsUpCustom"), ttnUp, appUp, dev)
+		a.So(err, ShouldBeNil)
+		a.So(appUp.PayloadFields, ShouldBeEmpty)
+		a.So(len(h.qEvent), ShouldEqual, 1)
+		evt := <-h.qEvent
+		errEvt, ok := evt.Data.(types.ErrorEventData)
+		a.So(ok, ShouldBeTrue)
+		a.So(errEvt.Error, ShouldContainSubstring, "cannot be marshaled")
+	}
 }
 
 func buildCayenneLPPUplink(appID string) (*pb_broker.DeduplicatedUplinkMessage, *types.UplinkMessage) {
 	ttnUp := &pb_broker.DeduplicatedUplinkMessage{
-		AppId: appID,
-		DevId: "DevID-1",
+		AppID: appID,
+		DevID: "DevID-1",
 	}
 	appUp := &types.UplinkMessage{
 		FPort:      1,
@@ -116,10 +142,13 @@ func TestConvertFieldsUpCayenneLPP(t *testing.T) {
 		qEvent:       make(chan *types.DeviceEvent, 1),
 	}
 
+	dev := new(device.Device)
+	dev.Attributes = attributes
+
 	// No application
 	{
 		ttnUp, appUp := buildCayenneLPPUplink(appID)
-		err := h.ConvertFieldsUp(ctx, ttnUp, appUp, nil)
+		err := h.ConvertFieldsUp(ctx, ttnUp, appUp, dev)
 		a.So(err, ShouldBeNil)
 		a.So(appUp.PayloadFields, ShouldBeEmpty)
 	}
@@ -135,11 +164,12 @@ func TestConvertFieldsUpCayenneLPP(t *testing.T) {
 			h.applications.Delete(appID)
 		}()
 		ttnUp, appUp := buildCayenneLPPUplink(appID)
-		err := h.ConvertFieldsUp(ctx, ttnUp, appUp, nil)
+		err := h.ConvertFieldsUp(ctx, ttnUp, appUp, dev)
 		a.So(err, ShouldBeNil)
 		a.So(appUp.PayloadFields, ShouldResemble, map[string]interface{}{
 			"barometric_pressure_10": float32(1073.5),
 		})
+		a.So(appUp.Attributes, ShouldResemble, attributes)
 	}
 }
 
@@ -147,8 +177,8 @@ func buildCustomDownlink() (*pb_broker.DownlinkMessage, *types.DownlinkMessage) 
 	appEUI := types.AppEUI([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
 	devEUI := types.DevEUI([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
 	ttnDown := &pb_broker.DownlinkMessage{
-		AppEui: &appEUI,
-		DevEui: &devEUI,
+		AppEUI: &appEUI,
+		DevEUI: &devEUI,
 	}
 	appDown := &types.DownlinkMessage{
 		FPort:         1,
@@ -233,8 +263,8 @@ func buildCayenneLPPDownlink() (*pb_broker.DownlinkMessage, *types.DownlinkMessa
 	appEUI := types.AppEUI([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
 	devEUI := types.DevEUI([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
 	ttnDown := &pb_broker.DownlinkMessage{
-		AppEui: &appEUI,
-		DevEui: &devEUI,
+		AppEUI: &appEUI,
+		DevEUI: &devEUI,
 	}
 	appDown := &types.DownlinkMessage{
 		FPort:         1,

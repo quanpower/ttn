@@ -4,8 +4,11 @@
 package handler
 
 import (
+	"strings"
+
+	pb_broker "github.com/TheThingsNetwork/api/broker"
+	pb_gateway "github.com/TheThingsNetwork/api/gateway"
 	ttnlog "github.com/TheThingsNetwork/go-utils/log"
-	pb_broker "github.com/TheThingsNetwork/ttn/api/broker"
 	"github.com/TheThingsNetwork/ttn/core/handler/device"
 	"github.com/TheThingsNetwork/ttn/core/types"
 )
@@ -16,7 +19,7 @@ func (h *handler) ConvertMetadata(ctx ttnlog.Interface, ttnUp *pb_broker.Dedupli
 
 	// Transform Metadata
 	appUp.Metadata.Time = types.BuildTime(ttnUp.ServerTime)
-	if lorawan := ttnUp.ProtocolMetadata.GetLorawan(); lorawan != nil {
+	if lorawan := ttnUp.ProtocolMetadata.GetLoRaWAN(); lorawan != nil {
 		appUp.Metadata.Modulation = lorawan.Modulation.String()
 		appUp.Metadata.DataRate = lorawan.DataRate
 		appUp.Metadata.Bitrate = lorawan.BitRate
@@ -33,29 +36,46 @@ func (h *handler) ConvertMetadata(ctx ttnlog.Interface, ttnUp *pb_broker.Dedupli
 		}
 
 		gatewayMetadata := types.GatewayMetadata{
-			GtwID:      in.GatewayId,
+			GtwID:      in.GatewayID,
 			GtwTrusted: in.GatewayTrusted,
 			Timestamp:  in.Timestamp,
 			Time:       types.BuildTime(in.Time),
 			Channel:    in.Channel,
 			RFChain:    in.RfChain,
-			RSSI:       in.Rssi,
-			SNR:        in.Snr,
+			RSSI:       in.RSSI,
+			SNR:        in.SNR,
 		}
 
-		if gps := in.GetGps(); gps != nil {
-			gatewayMetadata.Altitude = gps.Altitude
-			gatewayMetadata.Longitude = gps.Longitude
-			gatewayMetadata.Latitude = gps.Latitude
+		if location := in.GetLocation(); location != nil {
+			gatewayMetadata.Altitude = location.Altitude
+			gatewayMetadata.Longitude = location.Longitude
+			gatewayMetadata.Latitude = location.Latitude
+			gatewayMetadata.Accuracy = location.Accuracy
+			if location.Source != pb_gateway.LocationMetadata_UNKNOWN {
+				gatewayMetadata.Source = strings.ToLower(location.Source.String())
+			}
 		}
 
-		appUp.Metadata.Gateways = append(appUp.Metadata.Gateways, gatewayMetadata)
+		if antennas := in.GetAntennas(); len(antennas) > 0 {
+			for _, antenna := range antennas {
+				gatewayMetadata.Antenna = uint8(antenna.Antenna)
+				gatewayMetadata.Channel = antenna.Channel
+				gatewayMetadata.RSSI = antenna.RSSI
+				gatewayMetadata.SNR = antenna.SNR
+				appUp.Metadata.Gateways = append(appUp.Metadata.Gateways, gatewayMetadata)
+			}
+		} else {
+			appUp.Metadata.Gateways = append(appUp.Metadata.Gateways, gatewayMetadata)
+		}
 	}
 
 	// Inject Device Metadata
-	appUp.Metadata.LocationMetadata.Latitude = dev.Latitude
-	appUp.Metadata.LocationMetadata.Longitude = dev.Longitude
-	appUp.Metadata.LocationMetadata.Altitude = dev.Altitude
+	if dev.Latitude != 0 || dev.Longitude != 0 {
+		appUp.Metadata.LocationMetadata.Latitude = dev.Latitude
+		appUp.Metadata.LocationMetadata.Longitude = dev.Longitude
+		appUp.Metadata.LocationMetadata.Altitude = dev.Altitude
+		appUp.Metadata.LocationMetadata.Source = "registry"
+	}
 
 	return nil
 }

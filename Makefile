@@ -25,8 +25,8 @@ deps: build-deps
 	govendor sync -v
 
 dev-deps: deps
-	@command -v protoc-gen-gogofast > /dev/null || go get github.com/gogo/protobuf/protoc-gen-gogofast
 	@command -v protoc-gen-grpc-gateway > /dev/null || go get github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway
+	@command -v protoc-gen-gogottn > /dev/null || go install github.com/TheThingsNetwork/ttn/utils/protoc-gen-gogottn
 	@command -v protoc-gen-ttndoc > /dev/null || go install github.com/TheThingsNetwork/ttn/utils/protoc-gen-ttndoc
 	@command -v mockgen > /dev/null || go get github.com/golang/mock/mockgen
 	@command -v golint > /dev/null || go get github.com/golang/lint/golint
@@ -36,10 +36,10 @@ dev-deps: deps
 
 PROTO_FILES = $(shell find api -name "*.proto" -and -not -name ".git")
 COMPILED_PROTO_FILES = $(patsubst api%.proto, api%.pb.go, $(PROTO_FILES))
-PROTOC_IMPORTS= -I/usr/local/include -I$(GO_PATH)/src -I$(PARENT_DIRECTORY) \
+PROTOC_IMPORTS= -I/usr/local/include -I$(GO_PATH)/src -I$(PWD)/vendor -I$(PARENT_DIRECTORY) \
 -I$(GO_PATH)/src/github.com/grpc-ecosystem/grpc-gateway/third_party/googleapis
 PROTOC = protoc $(PROTOC_IMPORTS) \
---gogofast_out=plugins=grpc:$(GO_SRC) \
+--gogottn_out=plugins=grpc:$(GO_SRC) \
 --grpc-gateway_out=:$(GO_SRC) `pwd`/
 
 protos-clean:
@@ -58,8 +58,16 @@ protodoc: $(PROTO_FILES)
 # Mocks
 
 mocks:
+	mockgen -source=./api/protocol/lorawan/device.pb.go -package lorawan DeviceManagerClient > api/protocol/lorawan/device_mock.go
 	mockgen -source=./api/networkserver/networkserver.pb.go -package networkserver NetworkServerClient > api/networkserver/networkserver_mock.go
 	mockgen -source=./api/discovery/client.go -package discovery Client > api/discovery/client_mock.go
+
+dev-certs:
+	ttn discovery gen-cert localhost discovery --config ./.env/discovery/dev.yml
+	ttn router gen-cert localhost router --config ./.env/router/dev.yml
+	ttn broker gen-cert localhost broker --config ./.env/broker/dev.yml
+	ttn networkserver gen-cert localhost networkserver --config ./.env/networkserver/dev.yml
+	ttn handler gen-cert localhost handler --config ./.env/handler/dev.yml
 
 # Go Test
 

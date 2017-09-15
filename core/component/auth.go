@@ -13,15 +13,15 @@ import (
 	"strings"
 	"time"
 
+	pb_discovery "github.com/TheThingsNetwork/api/discovery"
 	"github.com/TheThingsNetwork/go-account-lib/account"
 	"github.com/TheThingsNetwork/go-account-lib/auth"
 	"github.com/TheThingsNetwork/go-account-lib/cache"
 	"github.com/TheThingsNetwork/go-account-lib/claims"
 	"github.com/TheThingsNetwork/go-account-lib/keys"
 	"github.com/TheThingsNetwork/go-account-lib/tokenkey"
-	"github.com/TheThingsNetwork/ttn/api"
-	api_auth "github.com/TheThingsNetwork/ttn/api/auth"
-	pb_discovery "github.com/TheThingsNetwork/ttn/api/discovery"
+	api_auth "github.com/TheThingsNetwork/go-utils/grpc/auth"
+	"github.com/TheThingsNetwork/go-utils/grpc/ttnctx"
 	"github.com/TheThingsNetwork/ttn/api/pool"
 	"github.com/TheThingsNetwork/ttn/utils/errors"
 	"github.com/TheThingsNetwork/ttn/utils/security"
@@ -131,7 +131,7 @@ func (c *Component) initKeyPair() error {
 	c.Identity.PublicKey = string(pubPEM)
 
 	if c.Pool != nil {
-		c.Pool.AddDialOption(api_auth.WithTokenFunc(func(_ string) string {
+		c.Pool.AddDialOption(api_auth.WithTokenFunc("target-id", func(_ string) string {
 			token, _ := c.BuildJWT()
 			return token
 		}).DialOption())
@@ -172,8 +172,8 @@ func (c *Component) initRoots() error {
 func (c *Component) initBgCtx() error {
 	ctx := context.Background()
 	if c.Identity != nil {
-		ctx = api.ContextWithID(ctx, c.Identity.Id)
-		ctx = api.ContextWithServiceInfo(ctx, c.Identity.ServiceName, c.Identity.ServiceVersion, c.Identity.NetAddress)
+		ctx = ttnctx.OutgoingContextWithID(ctx, c.Identity.ID)
+		ctx = ttnctx.OutgoingContextWithServiceInfo(ctx, c.Identity.ServiceName, c.Identity.ServiceVersion, c.Identity.NetAddress)
 	}
 	c.Context = ctx
 	if c.Pool != nil {
@@ -194,7 +194,7 @@ func (c *Component) BuildJWT() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return security.BuildJWT(c.Identity.Id, 20*time.Second, privPEM)
+	return security.BuildJWT(c.Identity.ID, 20*time.Second, privPEM)
 }
 
 // GetContext returns a context for outgoing RPC request. If token is "", this function will generate a short lived token from the component
@@ -206,7 +206,7 @@ func (c *Component) GetContext(token string) context.Context {
 	if token == "" && c.Identity != nil {
 		token, _ = c.BuildJWT()
 	}
-	ctx = api.ContextWithToken(ctx, token)
+	ctx = ttnctx.OutgoingContextWithToken(ctx, token)
 	return ctx
 }
 
@@ -264,12 +264,12 @@ func (c *Component) ValidateNetworkContext(ctx context.Context) (component *pb_d
 		}
 	}()
 
-	id, err := api.IDFromContext(ctx)
+	id, err := ttnctx.IDFromIncomingContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	serviceName, _, _, _ := api.ServiceInfoFromContext(ctx)
+	serviceName, _, _, _ := ttnctx.ServiceInfoFromIncomingContext(ctx)
 	if serviceName == "" {
 		return nil, errors.NewErrInvalidArgument("Metadata", "service-name missing")
 	}
@@ -283,7 +283,7 @@ func (c *Component) ValidateNetworkContext(ctx context.Context) (component *pb_d
 		return announcement, nil
 	}
 
-	token, err := api.TokenFromContext(ctx)
+	token, err := ttnctx.TokenFromIncomingContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -297,8 +297,8 @@ func (c *Component) ValidateNetworkContext(ctx context.Context) (component *pb_d
 		err = errors.NewErrPermissionDenied(fmt.Sprintf("Token was issued by %s, not by %s", claims.Issuer, id))
 		return
 	}
-	if claims.Subject != "" && claims.Subject != claims.Issuer && claims.Subject != c.Identity.Id {
-		err = errors.NewErrPermissionDenied(fmt.Sprintf("Token was issued to connect with %s, not with %s", claims.Subject, c.Identity.Id))
+	if claims.Subject != "" && claims.Subject != claims.Issuer && claims.Subject != c.Identity.ID {
+		err = errors.NewErrPermissionDenied(fmt.Sprintf("Token was issued to connect with %s, not with %s", claims.Subject, c.Identity.ID))
 		return
 	}
 
@@ -307,7 +307,7 @@ func (c *Component) ValidateNetworkContext(ctx context.Context) (component *pb_d
 
 // ValidateTTNAuthContext gets a token from the context and validates it
 func (c *Component) ValidateTTNAuthContext(ctx context.Context) (*claims.Claims, error) {
-	token, err := api.TokenFromContext(ctx)
+	token, err := ttnctx.TokenFromIncomingContext(ctx)
 	if err != nil {
 		return nil, err
 	}
